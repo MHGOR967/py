@@ -6,23 +6,6 @@ import json
 import time
 import threading
 from datetime import datetime
-from flask import Flask
-import os
-
-# === سيرفر ويب لإبقاء البوت شغال على Render ===
-web_app = Flask('')
-
-@web_app.route('/')
-def home():
-    return 'TikWahm Bot is running!'
-
-def run_web():
-    port = int(os.environ.get('PORT', 10000))
-    web_app.run(host='0.0.0.0', port=port)
-
-web_thread = threading.Thread(target=run_web)
-web_thread.daemon = True
-web_thread.start()
 
 BOT_TOKEN = "8945719165:AAHeD9sJFlRDiUKEUUlj6bSoYxtwGmgmKmw"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -31,24 +14,6 @@ try:
     bot.delete_webhook()
 except:
     pass
-
-# === الاشتراك الإجباري ===
-FORCED_CHANNEL = "@urlcam"
-
-def is_subscribed(chat_id):
-    """التحقق من اشتراك المستخدم في القناة الإجبارية"""
-    try:
-        member = bot.get_chat_member(FORCED_CHANNEL, chat_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
-
-def get_subscribe_markup():
-    """زر الاشتراك في القناة"""
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/urlcam"))
-    markup.add(types.InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check_sub"))
-    return markup
 
 # === تخزين بيانات المستخدمين ===
 user_states = {}   # {chat_id: {"state": "...", "data": {...}}}
@@ -683,11 +648,6 @@ def send_welcome(message):
     if chat_id not in user_lang:
         user_lang[chat_id] = "ar"
     
-    # التحقق من الاشتراك الإجباري
-    if not is_subscribed(chat_id):
-        bot.send_message(chat_id, "⚠️ يجب عليك الاشتراك في القناة أولاً لاستخدام البوت:", reply_markup=get_subscribe_markup())
-        return
-    
     first_name = message.from_user.first_name if message.from_user and message.from_user.first_name else ""
     
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -725,26 +685,6 @@ def handle_successful_payment(message):
 def handle_callback(call):
     chat_id = call.message.chat.id
     data = call.data
-    
-    # === التحقق من الاشتراك ===
-    if data == "check_sub":
-        if is_subscribed(chat_id):
-            bot.answer_callback_query(call.id, "✅ تم التحقق! مرحباً بك.", show_alert=True)
-            # إرسال رسالة الترحيب
-            first_name = call.from_user.first_name if call.from_user and call.from_user.first_name else ""
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton(t("btn_private", chat_id), callback_data="menu_private"),
-                types.InlineKeyboardButton(t("btn_search", chat_id), callback_data="menu_search"),
-            )
-            markup.add(
-                types.InlineKeyboardButton(t("btn_lang", chat_id), callback_data="menu_lang"),
-            )
-            welcome_text = t("welcome", chat_id).format(first_name=first_name)
-            bot.send_message(chat_id, welcome_text, parse_mode="HTML", reply_markup=markup)
-        else:
-            bot.answer_callback_query(call.id, "❌ لم يتم الاشتراك بعد! اشترك في القناة ثم اضغط تحقق.", show_alert=True)
-        return
     
     # === القائمة الرئيسية ===
     if data == "menu_main":
@@ -1161,11 +1101,6 @@ def handle_message(message):
     if chat_id not in user_lang:
         user_lang[chat_id] = "ar"
     
-    # التحقق من الاشتراك الإجباري
-    if not is_subscribed(chat_id):
-        bot.send_message(chat_id, "⚠️ يجب عليك الاشتراك في القناة أولاً لاستخدام البوت:", reply_markup=get_subscribe_markup())
-        return
-    
     # === حالة انتظار session_key (معدل - تحقق تلقائي بدون طلب يوزرنيم) ===
     state = user_states.get(chat_id, {})
     if state.get("state") == "waiting_session":
@@ -1297,8 +1232,7 @@ def handle_message(message):
         return
     
     # === تحميل فيديو تيك توك ===
-    # يتعرف على كل أنواع روابط الفيديو: /video/, /photo/, الروابط المختصرة (vm, vt, tiktok.com/t/)
-    is_video_link = ("tiktok.com/" in text and "/video/" in text) or ("tiktok.com/" in text and "/photo/" in text) or "vm.tiktok.com/" in text or "vt.tiktok.com/" in text or ("tiktok.com/t/" in text)
+    is_video_link = ("tiktok.com/" in text and "/video/" in text) or "vm.tiktok.com/" in text or "vt.tiktok.com/" in text
     if is_video_link:
         bot.send_chat_action(chat_id, 'typing')
         bot.reply_to(message, "⬇️ جاري تحميل الفيديو... ⏳")
@@ -1331,20 +1265,9 @@ def handle_message(message):
         return
     
     # === البحث عن حساب تيك توك ===
-    username = text.strip()
-    
-    # استخراج اليوزر من الرابط بذكاء
+    username = text.replace("@", "")
     if "tiktok.com/" in username:
-        # رابط بروفايل فيه @ مثل: tiktok.com/@hackwahm?_r=1
-        if "/@" in username:
-            username = username.split("/@")[1].split("/")[0].split("?")[0]
-        else:
-            # رابط غير معروف - مو بروفايل ومو فيديو
-            bot.reply_to(message, "❌ يرجى إرسال اسم مستخدم صحيح.")
-            return
-    else:
-        # يوزر عادي بدون رابط
-        username = username.replace("@", "").strip()
+        username = username.split("tiktok.com/")[1].split("/")[0].split("?")[0].replace("@", "")
     
     if not username or len(username) < 2:
         bot.reply_to(message, "❌ يرجى إرسال اسم مستخدم صحيح.")
@@ -1486,5 +1409,4 @@ def handle_message(message):
         pass
 
 print("✅ TikWahm Bot started successfully!")
-print(f"🌐 Web server running on port {os.environ.get('PORT', 10000)}")
 bot.polling(none_stop=True)
