@@ -264,46 +264,104 @@ def get_tikwm_user(username):
     return None
 
 def get_countik_userinfo(sec_uid):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        r = requests.get(f"https://countik.com/api/userinfo?sec_user_id={sec_uid}", headers=headers, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        pass
+    headers_list = [
+        {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+            'Referer': 'https://countik.com/',
+            'Origin': 'https://countik.com',
+        },
+        {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://countik.com/',
+            'Origin': 'https://countik.com',
+        },
+    ]
+    for headers in headers_list:
+        try:
+            r = requests.get(f"https://countik.com/api/userinfo?sec_user_id={sec_uid}", headers=headers, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data:
+                    return data
+        except:
+            pass
+        time.sleep(1)
     return None
 
 def get_countik_analyze(sec_uid):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        r = requests.get(f"https://countik.com/api/analyze?sec_user_id={sec_uid}", headers=headers, timeout=15)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        pass
+    headers_list = [
+        {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+            'Referer': 'https://countik.com/',
+            'Origin': 'https://countik.com',
+        },
+        {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://countik.com/',
+            'Origin': 'https://countik.com',
+        },
+    ]
+    for headers in headers_list:
+        try:
+            r = requests.get(f"https://countik.com/api/analyze?sec_user_id={sec_uid}", headers=headers, timeout=20)
+            if r.status_code == 200:
+                data = r.json()
+                if data:
+                    return data
+        except:
+            pass
+        time.sleep(1)
     return None
 
 def get_region_from_videos(username, video_id=None):
     headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
     }
+    # محاولة 1: عبر tikwm API (الأفضل للسيرفرات)
     if video_id:
         try:
-            r = requests.get(f'https://www.tiktok.com/@{username}/video/{video_id}', headers=headers, timeout=10, allow_redirects=True)
+            r = requests.get(f"https://www.tikwm.com/api/?url=https://www.tiktok.com/@{username}/video/{video_id}", timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("code") == 0 and data.get("data"):
+                    region = data["data"].get("region")
+                    if region:
+                        return region
+        except:
+            pass
+    # محاولة 2: عبر صفحة تيك توك مباشرة
+    if video_id:
+        try:
+            r = requests.get(f'https://www.tiktok.com/@{username}/video/{video_id}', headers=headers, timeout=15, allow_redirects=True)
             if r.status_code == 200:
                 locs = re.findall(r'"locationCreated"\s*:\s*"([^"]+)"', r.text)
                 if locs:
                     return locs[0]
+                # محاولة استخراج من diversificationLabels أو region
+                regions = re.findall(r'"region"\s*:\s*"([A-Z]{2})"', r.text)
+                if regions:
+                    return regions[0]
         except:
             pass
+    # محاولة 3: عبر tikwm بدون video_id (آخر فيديو)
     try:
-        r = requests.get(f"https://www.tikwm.com/api/?url=https://www.tiktok.com/@{username}/video/{video_id}", timeout=15)
+        r = requests.get(f"https://www.tikwm.com/api/user/posts?unique_id={username}&count=1", timeout=15)
         if r.status_code == 200:
             data = r.json()
-            if data.get("code") == 0 and data.get("data"):
-                region = data["data"].get("region")
-                if region:
-                    return region
+            if data.get("code") == 0 and data.get("data") and data["data"].get("videos"):
+                videos = data["data"]["videos"]
+                if videos and videos[0].get("region"):
+                    return videos[0]["region"]
     except:
         pass
     return None
@@ -1385,15 +1443,39 @@ def handle_message(message):
         lang_code = countik_info.get("language", "")
         if lang_code:
             language = LANGUAGE_MAP.get(lang_code, lang_code)
+    # fallback: محاولة جلب اللغة من بيانات tikwm
+    if language == "غير متوفر":
+        lang_code = user.get("language", "")
+        if lang_code:
+            language = LANGUAGE_MAP.get(lang_code, lang_code)
     
     region = "غير متوفر"
     video_id_for_region = None
     if analyze_data and analyze_data.get("videos"):
         video_id_for_region = analyze_data["videos"][0].get("id")
-    if video_id_for_region:
+    # fallback: محاولة جلب video_id من tikwm إذا countik ما رجع شي
+    if not video_id_for_region:
+        try:
+            posts_r = requests.get(f"https://www.tikwm.com/api/user/posts?unique_id={unique_id}&count=1", timeout=15)
+            if posts_r.status_code == 200:
+                posts_data = posts_r.json()
+                if posts_data.get("code") == 0 and posts_data.get("data") and posts_data["data"].get("videos"):
+                    first_video = posts_data["data"]["videos"][0]
+                    video_id_for_region = first_video.get("video_id") or first_video.get("id")
+                    # محاولة جلب الدولة مباشرة من الفيديو
+                    if first_video.get("region"):
+                        region = COUNTRY_MAP.get(first_video["region"].upper(), first_video["region"])
+        except:
+            pass
+    if region == "غير متوفر" and video_id_for_region:
         region_code = get_region_from_videos(username, video_id_for_region)
         if region_code:
             region = COUNTRY_MAP.get(region_code.upper(), region_code)
+    # fallback: جلب الدولة من user.region في tikwm
+    if region == "غير متوفر":
+        user_region = user.get("region", "")
+        if user_region:
+            region = COUNTRY_MAP.get(user_region.upper(), user_region)
     
     story_status = user.get("UserStoryStatus", 0)
     has_story = story_status > 0
