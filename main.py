@@ -682,6 +682,15 @@ def send_welcome(message):
     if chat_id not in user_lang:
         user_lang[chat_id] = "ar"
     
+    # التحقق من الاشتراك الإجباري
+    if not is_subscribed(chat_id):
+        bot.send_message(
+            chat_id,
+            "⚠️ يجب عليك الاشتراك في القناة أولاً لاستخدام البوت.",
+            reply_markup=get_subscribe_markup()
+        )
+        return
+    
     first_name = message.from_user.first_name if message.from_user and message.from_user.first_name else ""
     
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -719,6 +728,27 @@ def handle_successful_payment(message):
 def handle_callback(call):
     chat_id = call.message.chat.id
     data = call.data
+    
+    # === التحقق من الاشتراك ===
+    if data == "check_sub":
+        bot.answer_callback_query(call.id)
+        if is_subscribed(chat_id):
+            bot.delete_message(chat_id, call.message.message_id)
+            # إرسال رسالة الترحيب بعد التحقق
+            first_name = call.from_user.first_name if call.from_user and call.from_user.first_name else ""
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton(t("btn_private", chat_id), callback_data="menu_private"),
+                types.InlineKeyboardButton(t("btn_search", chat_id), callback_data="menu_search"),
+            )
+            markup.add(
+                types.InlineKeyboardButton(t("btn_lang", chat_id), callback_data="menu_lang"),
+            )
+            welcome_text = t("welcome", chat_id).format(first_name=first_name)
+            bot.send_message(chat_id, welcome_text, parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.answer_callback_query(call.id, "❌ لم تشترك بعد! اشترك في القناة ثم اضغط تحقق.", show_alert=True)
+        return
     
     # === القائمة الرئيسية ===
     if data == "menu_main":
@@ -1134,6 +1164,15 @@ def handle_message(message):
     
     if chat_id not in user_lang:
         user_lang[chat_id] = "ar"
+    
+    # التحقق من الاشتراك الإجباري
+    if not is_subscribed(chat_id):
+        bot.send_message(
+            chat_id,
+            "⚠️ يجب عليك الاشتراك في القناة أولاً لاستخدام البوت.",
+            reply_markup=get_subscribe_markup()
+        )
+        return
     
     # === حالة انتظار session_key (معدل - تحقق تلقائي بدون طلب يوزرنيم) ===
     state = user_states.get(chat_id, {})
