@@ -20,7 +20,6 @@ def run_web():
     port = int(os.environ.get('PORT', 10000))
     web_app.run(host='0.0.0.0', port=port)
 
-# تشغيل السيرفر في thread منفصل
 web_thread = threading.Thread(target=run_web)
 web_thread.daemon = True
 web_thread.start()
@@ -33,26 +32,23 @@ try:
 except:
     pass
 
-# === إعدادات الأدمن والبيانات ===
-ADMIN_ID = 8349168441
-FORCED_CHANNELS = [] # قائمة اليوزرات أو الآيديات للقنوات
-USERS_FILE = "users.json"
-CHANNELS_FILE = "channels.json"
+# === الاشتراك الإجباري ===
+FORCED_CHANNEL = "@urlcam"
 
-def load_data(file, default):
+def is_subscribed(chat_id):
+    """التحقق من اشتراك المستخدم في القناة الإجبارية"""
     try:
-        with open(file, "r") as f:
-            return json.load(f)
+        member = bot.get_chat_member(FORCED_CHANNEL, chat_id)
+        return member.status in ['member', 'administrator', 'creator']
     except:
-        return default
+        return False
 
-def save_data(file, data):
-    with open(file, "w") as f:
-        json.dump(data, f)
-
-# تحميل القنوات والمستخدمين
-FORCED_CHANNELS = load_data(CHANNELS_FILE, [])
-all_users = load_data(USERS_FILE, [])
+def get_subscribe_markup():
+    """زر الاشتراك في القناة"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/urlcam"))
+    markup.add(types.InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check_sub"))
+    return markup
 
 # === تخزين بيانات المستخدمين ===
 user_states = {}   # {chat_id: {"state": "...", "data": {...}}}
@@ -233,40 +229,45 @@ def get_account_age(create_time):
         years = days // 365
         remaining = days % 365
         months = remaining // 30
-        
+        remaining_days = remaining % 30
         parts = []
-        if years > 0: parts.append(f"{years} سنة")
-        if months > 0: parts.append(f"{months} شهر")
-        if not parts: parts.append(f"{days} يوم")
-        return " و ".join(parts)
+        if years > 0:
+            parts.append(f"{years} سنة")
+        if months > 0:
+            parts.append(f"{months} شهر")
+        if remaining_days > 0:
+            parts.append(f"{remaining_days} يوم")
+        return " و ".join(parts) if parts else "أقل من يوم"
     except:
         return "غير متوفر"
 
-def timestamp_to_date(timestamp):
+def timestamp_to_date(ts):
+    if not ts or ts == 0:
+        return "غير متوفر"
     try:
-        return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+        dt = datetime.fromtimestamp(ts)
+        if dt.year <= 1970:
+            return "غير متوفر"
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     except:
         return "غير متوفر"
 
-# === دوال TikTok API ===
+# === دوال جلب البيانات ===
 def get_tikwm_user(username):
-    """جلب معلومات المستخدم عبر TikWM API"""
     try:
-        url = f"https://www.tikwm.com/api/user/info?unique_id={username}"
-        r = requests.get(url, timeout=15)
+        r = requests.get(f"https://www.tikwm.com/api/user/info?unique_id={username}", timeout=15)
         if r.status_code == 200:
             data = r.json()
-            if data.get("code") == 0:
-                return data.get("data")
+            if data and data.get("code") == 0 and data.get("data"):
+                return data["data"]
     except:
         pass
     return None
 
 def get_countik_userinfo(sec_uid):
-    """جلب معلومات إضافية عبر Countik"""
     try:
-        url = f"https://countik.com/api/userinfo?sec_user_id={sec_uid}"
-        r = requests.get(url, timeout=15)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        r = requests.get(f"https://countik.com/api/userinfo?sec_user_id={sec_uid}", headers=headers, timeout=10)
         if r.status_code == 200:
             return r.json()
     except:
@@ -274,153 +275,264 @@ def get_countik_userinfo(sec_uid):
     return None
 
 def get_countik_analyze(sec_uid):
-    """تحليل الحساب عبر Countik"""
     try:
-        url = f"https://countik.com/api/analyze?sec_user_id={sec_uid}"
-        r = requests.get(url, timeout=15)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        r = requests.get(f"https://countik.com/api/analyze?sec_user_id={sec_uid}", headers=headers, timeout=15)
         if r.status_code == 200:
             return r.json()
     except:
         pass
     return None
 
-def get_region_from_videos(username, video_id):
-    """محاولة استنتاج الدولة من الفيديو"""
+def get_region_from_videos(username, video_id=None):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+    }
+    if video_id:
+        try:
+            r = requests.get(f'https://www.tiktok.com/@{username}/video/{video_id}', headers=headers, timeout=10, allow_redirects=True)
+            if r.status_code == 200:
+                locs = re.findall(r'"locationCreated"\s*:\s*"([^"]+)"', r.text)
+                if locs:
+                    return locs[0]
+        except:
+            pass
     try:
-        url = f"https://www.tikwm.com/api/video/info?url=https://www.tiktok.com/@{username}/video/{video_id}"
-        r = requests.get(url, timeout=15)
+        r = requests.get(f"https://www.tikwm.com/api/?url=https://www.tiktok.com/@{username}/video/{video_id}", timeout=15)
         if r.status_code == 200:
             data = r.json()
-            if data.get("code") == 0:
-                return data.get("data", {}).get("region")
+            if data.get("code") == 0 and data.get("data"):
+                region = data["data"].get("region")
+                if region:
+                    return region
     except:
         pass
     return None
 
 def get_stories(username):
-    """جلب الستوري"""
     try:
-        url = f"https://www.tikwm.com/api/user/posts?unique_id={username}&count=10"
-        r = requests.get(url, timeout=15)
+        r = requests.get(f"https://www.tikwm.com/api/user/story?unique_id={username}", timeout=15)
         if r.status_code == 200:
-            return r.json().get("data")
+            data = r.json()
+            if data and data.get("code") == 0:
+                return data.get("data", {})
     except:
         pass
     return None
 
+# === دوال إدارة الحساب ===
 def verify_session(session_key):
-    """التحقق من صحة sessionid وجلب معلومات الحساب"""
+    """التحقق من صلاحية الجلسة وإرجاع معلومات المستخدم"""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Cookie': f'sessionid={session_key}; sid_tt={session_key}',
     }
     try:
-        r = requests.get('https://www.tiktok.com/api/user/detail/?device_id=7315123456789012345', headers=headers, timeout=15)
+        r = requests.get('https://www.tiktok.com/api/user/detail/', headers=headers, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if data.get("userInfo"):
-                return data.get("userInfo")
+                return data["userInfo"]
     except:
         pass
     return None
 
-def get_following_list(session_key, user_id, count=100):
-    """جلب قائمة المتابَعين (الأشخاص الذين يتابعهم الحساب)"""
+def unfollow_user(session_key, user_id, sec_uid):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Cookie': f'sessionid={session_key}; sid_tt={session_key}',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+    data = {'user_id': user_id, 'sec_user_id': sec_uid, 'type': 0}
+    try:
+        r = requests.post('https://www.tiktok.com/api/commit/follow/user/', headers=headers, data=data, timeout=10)
+        if r.status_code == 200:
+            return True
+    except:
+        pass
+    return False
+
+def get_following_list(session_key, user_id, count=200):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Cookie': f'sessionid={session_key}; sid_tt={session_key}',
     }
     following = []
     cursor = 0
-    try:
-        while len(following) < count:
-            url = f'https://www.tiktok.com/api/user/list/?count=30&cursor={cursor}&type=1&user_id={user_id}'
-            r = requests.get(url, headers=headers, timeout=15)
+    while True:
+        try:
+            r = requests.get(
+                f'https://www.tiktok.com/api/user/list/?scene=67&count=20&min_time=0&max_time=0&cursor={cursor}&user_id={user_id}',
+                headers=headers, timeout=15
+            )
             if r.status_code == 200:
                 data = r.json()
-                users = data.get("userList", []) or data.get("user_list", [])
-                if not users: break
+                users = data.get("userList", [])
+                if not users:
+                    break
                 following.extend(users)
-                if not data.get("hasMore", False): break
+                if not data.get("hasMore", False) or len(following) >= count:
+                    break
                 cursor = data.get("cursor", 0)
             else:
                 break
-            time.sleep(1)
-    except:
-        pass
-    return following[:count]
-
-def unfollow_user(session_key, target_uid, target_sec_uid):
-    """إلغاء متابعة مستخدم"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Cookie': f'sessionid={session_key}; sid_tt={session_key}',
-        'Referer': 'https://www.tiktok.com/',
-    }
-    try:
-        url = f'https://www.tiktok.com/api/commit/follow/user/?type=0&object_id={target_uid}&sec_user_id={target_sec_uid}'
-        r = requests.post(url, headers=headers, timeout=15)
-        return r.status_code == 200 and r.json().get("status_code") == 0
-    except:
-        return False
+        except:
+            break
+        time.sleep(1)
+    return following
 
 def remove_repost(session_key, video_id):
-    """حذف ريبوست"""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Cookie': f'sessionid={session_key}; sid_tt={session_key}',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
     try:
-        url = 'https://www.tiktok.com/passport/repost/item/delete/'
-        data = {'item_id': video_id}
-        r = requests.post(url, data=data, headers=headers, timeout=15)
-        return r.status_code == 200
+        r = requests.post('https://www.tiktok.com/api/item/repost/cancel/', headers=headers, data={'item_id': video_id}, timeout=10)
+        if r.status_code == 200:
+            return True
     except:
-        return False
+        pass
+    return False
 
+# === دوال البحث بالبريد والهاتف (تستخدم session_key للبحث الحقيقي) ===
 def search_by_email_tiktok(email, session_key=None):
-    """البحث عن حساب تيك توك عبر البريد الإلكتروني"""
+    """البحث عن حساب تيك توك مرتبط ببريد إلكتروني"""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://www.tiktok.com/',
     }
-    # محاولة 1: عبر API داخلي (يتطلب session)
+    
+    # محاولة 1: البحث عبر session (الأقوى)
     if session_key:
         try:
             auth_headers = headers.copy()
             auth_headers['Cookie'] = f'sessionid={session_key}; sid_tt={session_key}'
-            r = requests.get(f'https://www.tiktok.com/api/user/find_by_email/?email={email}', headers=auth_headers, timeout=15)
+            # البحث عبر جهات الاتصال
+            r = requests.post(
+                'https://www.tiktok.com/api/user/search/',
+                data={'keyword': email, 'count': '5', 'cursor': '0'},
+                headers=auth_headers,
+                timeout=15
+            )
             if r.status_code == 200:
                 data = r.json()
-                if data.get("user"): return data["user"]
+                user_list = data.get("user_list", []) or data.get("data", [])
+                if user_list:
+                    user = user_list[0].get("user_info", user_list[0])
+                    return user
+        except:
+            pass
+        
+        # محاولة عبر find friends by contacts
+        try:
+            auth_headers = headers.copy()
+            auth_headers['Cookie'] = f'sessionid={session_key}; sid_tt={session_key}'
+            auth_headers['Content-Type'] = 'application/json'
+            payload = json.dumps({"contacts": [{"email": email, "contact_name": "search"}]})
+            r = requests.post(
+                'https://www.tiktok.com/api/user/find_contacts/',
+                data=payload,
+                headers=auth_headers,
+                timeout=15
+            )
+            if r.status_code == 200:
+                data = r.json()
+                contacts = data.get("contacts", []) or data.get("data", {}).get("contacts", [])
+                if contacts:
+                    return contacts[0]
         except:
             pass
     
-    # محاولة 2: عبر passport (فحص وجود الحساب)
+    # محاولة 2: عبر TikTok login check (بدون session)
     try:
-        r = requests.post(
-            'https://www.tiktok.com/passport/web/email/check_availability/',
-            data={'email': email},
-            headers=headers,
+        session_req = requests.Session()
+        session_req.headers.update(headers)
+        session_req.get('https://www.tiktok.com/login', timeout=8)
+        csrf = session_req.cookies.get('tt_csrf_token', '')
+        
+        r = session_req.post(
+            'https://www.tiktok.com/passport/web/email/check/',
+            data={'email': email, 'mix_mode': '1', 'account_sdk_source': 'web'},
+            headers={'X-Csrf-Token': csrf, 'Content-Type': 'application/x-www-form-urlencoded'},
             timeout=10
         )
         if r.status_code == 200:
             data = r.json()
             if data.get("data") and data["data"].get("is_registered"):
-                return {"exists": True, "masked_email": email}
+                return {"exists": True, "email": email, "is_registered": True}
+            if data.get("data") and data["data"].get("mask_email"):
+                return {"masked_email": data["data"]["mask_email"], "exists": True}
     except:
         pass
+    
+    # محاولة 3: عبر password reset flow
+    try:
+        r = requests.post(
+            'https://www.tiktok.com/passport/web/send_code/',
+            data={'email': email, 'type': '1', 'account_sdk_source': 'web'},
+            headers=headers,
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("data") and data["data"].get("mask_email"):
+                return {"masked_email": data["data"]["mask_email"], "exists": True}
+            elif data.get("message") == "success":
+                return {"exists": True, "email": email}
+    except:
+        pass
+    
+    # محاولة 4: عبر account check
+    try:
+        r = requests.post(
+            'https://www.tiktok.com/passport/web/account/check/',
+            data={'email': email, 'scene': 'find_account'},
+            headers=headers,
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("data"):
+                return data["data"]
+    except:
+        pass
+    
     return None
 
 def search_by_phone_tiktok(phone, session_key=None):
-    """البحث عن حساب تيك توك عبر رقم الهاتف"""
-    clean_phone = phone.replace("+", "").replace(" ", "")
+    """البحث عن حساب تيك توك مرتبط برقم هاتف"""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://www.tiktok.com/',
     }
+    clean_phone = phone.replace("+", "").replace(" ", "").replace("-", "")
     
-    # محاولة 1: عبر contact sync (تتطلب session)
+    # محاولة 1: البحث عبر session (الأقوى)
     if session_key:
+        try:
+            auth_headers = headers.copy()
+            auth_headers['Cookie'] = f'sessionid={session_key}; sid_tt={session_key}'
+            r = requests.post(
+                'https://www.tiktok.com/api/user/search/',
+                data={'keyword': phone, 'count': '5', 'cursor': '0'},
+                headers=auth_headers,
+                timeout=15
+            )
+            if r.status_code == 200:
+                data = r.json()
+                user_list = data.get("user_list", []) or data.get("data", [])
+                if user_list:
+                    user = user_list[0].get("user_info", user_list[0])
+                    return user
+        except:
+            pass
+        
+        # محاولة عبر find friends by contacts
         try:
             auth_headers = headers.copy()
             auth_headers['Cookie'] = f'sessionid={session_key}; sid_tt={session_key}'
@@ -564,74 +676,17 @@ def download_tiktok_video(url):
     
     return None
 
-# === دوال الاشتراك الإجباري والأدمن ===
-def is_subscribed(user_id):
-    for channel in FORCED_CHANNELS:
-        try:
-            status = bot.get_chat_member(channel, user_id).status
-            if status not in ["member", "administrator", "creator"]:
-                return False
-        except:
-            # إذا فشل البوت في التحقق (مثلاً ليس أدمن في القناة)
-            continue
-    return True
-
-def get_forced_markup():
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for channel in FORCED_CHANNELS:
-        try:
-            chat = bot.get_chat(channel)
-            title = chat.title
-            url = f"https://t.me/{chat.username}" if chat.username else f"https://t.me/{channel}"
-            markup.add(types.InlineKeyboardButton(f"اشترك في: {title}", url=url))
-        except:
-            markup.add(types.InlineKeyboardButton(f"اشترك هنا: {channel}", url=f"https://t.me/{channel.replace('@', '')}"))
-    markup.add(types.InlineKeyboardButton("تحقق من الاشتراك ✅", callback_data="check_sub"))
-    return markup
-
-def admin_panel():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("إحصائيات 📊", callback_data="admin_stats"),
-        types.InlineKeyboardButton("إرسال جماعي 📢", callback_data="admin_broadcast"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("إضافة قناة ➕", callback_data="admin_add_channel"),
-        types.InlineKeyboardButton("حذف قناة ➖", callback_data="admin_del_channel"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("قائمة القنوات 📋", callback_data="admin_list_channels"),
-    )
-    return markup
-
 # === أمر البداية ===
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     chat_id = message.chat.id
-    user = message.from_user
-    
-    # إشعار مستخدم جديد
-    if chat_id not in all_users:
-        all_users.append(chat_id)
-        save_data(USERS_FILE, all_users)
-        try:
-            admin_msg = (
-                f"👤 مستخدم جديد بدأ البوت:\n\n"
-                f"├ الاسم: {user.first_name}\n"
-                f"├ اليوزر: @{user.username if user.username else 'لا يوجد'}\n"
-                f"└ الآيدي: <code>{chat_id}</code>"
-            )
-            bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML")
-        except:
-            pass
-
-    # تحقق من الاشتراك الإجباري
-    if not is_subscribed(chat_id):
-        bot.send_message(chat_id, "⚠️ عذراً، يجب عليك الاشتراك في قنوات البوت أولاً لتتمكن من استخدامه.", reply_markup=get_forced_markup())
-        return
-
     if chat_id not in user_lang:
         user_lang[chat_id] = "ar"
+    
+    # التحقق من الاشتراك الإجباري
+    if not is_subscribed(chat_id):
+        bot.send_message(chat_id, "⚠️ يجب عليك الاشتراك في القناة أولاً لاستخدام البوت:", reply_markup=get_subscribe_markup())
+        return
     
     first_name = message.from_user.first_name if message.from_user and message.from_user.first_name else ""
     
@@ -645,14 +700,7 @@ def send_welcome(message):
     )
     
     welcome_text = t("welcome", chat_id).format(first_name=first_name)
-    welcome_text += "\n\n🤖 TikWahmbot"
     bot.send_message(chat_id, welcome_text, parse_mode="HTML", reply_markup=markup)
-
-# === أمر الأدمن ===
-@bot.message_handler(commands=["admin"])
-def send_admin(message):
-    if message.chat.id == ADMIN_ID:
-        bot.send_message(ADMIN_ID, "مرحباً بك في لوحة تحكم الأدمن 🔐", reply_markup=admin_panel())
 
 # === معالجة الدفع ===
 @bot.pre_checkout_query_handler(func=lambda query: True)
@@ -668,7 +716,7 @@ def handle_successful_payment(message):
             "✅ تم الدفع بنجاح!\n\n"
             "⏳ هذه الميزة قيد التطوير حالياً.\n"
             "🔜 قريباً - ساعات محددة ونضيفها!\n\n"
-            "شكراً لدعمك 💎\n\nTikWahmbot"
+            "شكراً لدعمك 💎"
         )
         bot.send_message(message.chat.id, response)
 
@@ -678,65 +726,26 @@ def handle_callback(call):
     chat_id = call.message.chat.id
     data = call.data
     
-    # تحقق من الاشتراك عند الضغط على زر التحقق
+    # === التحقق من الاشتراك ===
     if data == "check_sub":
         if is_subscribed(chat_id):
-            bot.answer_callback_query(call.id, "✅ تم التحقق بنجاح، يمكنك الآن استخدام البوت.")
-            bot.delete_message(chat_id, call.message.message_id)
-            send_welcome(call.message)
-        else:
-            bot.answer_callback_query(call.id, "❌ لم تشترك في جميع القنوات بعد!", show_alert=True)
-        return
-
-    # === لوحة تحكم الأدمن ===
-    if chat_id == ADMIN_ID:
-        if data == "admin_stats":
-            stats = (
-                f"📊 إحصائيات البوت:\n\n"
-                f"├ عدد المستخدمين: {len(all_users)}\n"
-                f"├ عدد القنوات الإجبارية: {len(FORCED_CHANNELS)}\n"
-                f"└ عدد الجلسات النشطة: {len(user_sessions)}"
+            bot.answer_callback_query(call.id, "✅ تم التحقق! مرحباً بك.", show_alert=True)
+            # إرسال رسالة الترحيب
+            first_name = call.from_user.first_name if call.from_user and call.from_user.first_name else ""
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton(t("btn_private", chat_id), callback_data="menu_private"),
+                types.InlineKeyboardButton(t("btn_search", chat_id), callback_data="menu_search"),
             )
-            bot.edit_message_text(stats, chat_id, call.message.message_id, reply_markup=admin_panel())
-        
-        elif data == "admin_broadcast":
-            user_states[chat_id] = {"state": "waiting_broadcast"}
-            bot.send_message(chat_id, "أرسل الرسالة التي تريد إرسالها للجميع (نص فقط):")
-        
-        elif data == "admin_add_channel":
-            user_states[chat_id] = {"state": "waiting_add_channel"}
-            bot.send_message(chat_id, "أرسل معرف القناة (مثال: @TikWahm):")
-            
-        elif data == "admin_del_channel":
-            if not FORCED_CHANNELS:
-                bot.answer_callback_query(call.id, "لا توجد قنوات لحذفها")
-                return
-            markup = types.InlineKeyboardMarkup()
-            for ch in FORCED_CHANNELS:
-                markup.add(types.InlineKeyboardButton(ch, callback_data=f"delch_{ch}"))
-            markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_main"))
-            bot.edit_message_text("اختر القناة المراد حذفها:", chat_id, call.message.message_id, reply_markup=markup)
-            
-        elif data == "admin_list_channels":
-            if not FORCED_CHANNELS:
-                bot.answer_callback_query(call.id, "لا توجد قنوات مضافة")
-                return
-            msg = "📋 قائمة القنوات الإجبارية:\n\n" + "\n".join(FORCED_CHANNELS)
-            bot.edit_message_text(msg, chat_id, call.message.message_id, reply_markup=admin_panel())
-            
-        elif data == "admin_main":
-            bot.edit_message_text("مرحباً بك في لوحة تحكم الأدمن 🔐", chat_id, call.message.message_id, reply_markup=admin_panel())
-            
-        elif data.startswith("delch_"):
-            ch = data.replace("delch_", "")
-            if ch in FORCED_CHANNELS:
-                FORCED_CHANNELS.remove(ch)
-                save_data(CHANNELS_FILE, FORCED_CHANNELS)
-                bot.answer_callback_query(call.id, f"تم حذف القناة {ch}")
-                # تحديث القائمة
-                handle_callback(type('obj', (object,), {'message': call.message, 'data': 'admin_del_channel', 'id': call.id, 'from_user': call.from_user}))
-            return
-
+            markup.add(
+                types.InlineKeyboardButton(t("btn_lang", chat_id), callback_data="menu_lang"),
+            )
+            welcome_text = t("welcome", chat_id).format(first_name=first_name)
+            bot.send_message(chat_id, welcome_text, parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.answer_callback_query(call.id, "❌ لم يتم الاشتراك بعد! اشترك في القناة ثم اضغط تحقق.", show_alert=True)
+        return
+    
     # === القائمة الرئيسية ===
     if data == "menu_main":
         bot.answer_callback_query(call.id)
@@ -752,7 +761,6 @@ def handle_callback(call):
         if call.from_user and call.from_user.first_name:
             first_name = call.from_user.first_name
         welcome_text = t("welcome", chat_id).format(first_name=first_name)
-        welcome_text += "\n\nTikWahmbot"
         try:
             bot.edit_message_text(welcome_text, chat_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except:
@@ -790,7 +798,6 @@ def handle_callback(call):
         if call.from_user and call.from_user.first_name:
             first_name = call.from_user.first_name
         welcome_text = t("welcome", chat_id).format(first_name=first_name)
-        welcome_text += "\n\nTikWahmbot"
         try:
             bot.edit_message_text(welcome_text, chat_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except:
@@ -811,11 +818,10 @@ def handle_callback(call):
             types.InlineKeyboardButton(t("btn_search_phone", chat_id), callback_data="search_by_phone"),
         )
         markup.add(types.InlineKeyboardButton(t("btn_back", chat_id), callback_data="menu_main"))
-        footer = "\n\nTikWahmbot"
         try:
-            bot.edit_message_text(search_texts.get(lang, search_texts["ar"]) + footer, chat_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+            bot.edit_message_text(search_texts.get(lang, search_texts["ar"]), chat_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except:
-            bot.send_message(chat_id, search_texts.get(lang, search_texts["ar"]) + footer, parse_mode="HTML", reply_markup=markup)
+            bot.send_message(chat_id, search_texts.get(lang, search_texts["ar"]), parse_mode="HTML", reply_markup=markup)
     
     # === البحث بالبريد ===
     elif data == "search_by_email":
@@ -854,14 +860,13 @@ def handle_callback(call):
                 types.InlineKeyboardButton(t("btn_add_account", chat_id), callback_data="add_account"),
                 types.InlineKeyboardButton(t("btn_back", chat_id), callback_data="menu_main"),
             )
-            footer = "\n\nTikWahmbot"
             try:
                 bot.edit_message_text(
-                    t("private_section", chat_id) + "\n\n" + t("no_accounts", chat_id) + footer,
+                    t("private_section", chat_id) + "\n\n" + t("no_accounts", chat_id),
                     chat_id, call.message.message_id, parse_mode="HTML", reply_markup=markup
                 )
             except:
-                bot.send_message(chat_id, t("private_section", chat_id) + "\n\n" + t("no_accounts", chat_id) + footer, parse_mode="HTML", reply_markup=markup)
+                bot.send_message(chat_id, t("private_section", chat_id) + "\n\n" + t("no_accounts", chat_id), parse_mode="HTML", reply_markup=markup)
     
     # === إضافة حساب ===
     elif data == "add_account":
@@ -944,7 +949,7 @@ def handle_callback(call):
                     bot.send_message(chat_id, f"⏳ {i}/{total} | ✅ {success} | ❌ {failed}")
                 time.sleep(2)
             
-            bot.send_message(chat_id, f"✅ اكتمل!\n\n📊 الإجمالي: {total}\n✅ نجح: {success}\n❌ فشل: {failed}\n\nTikWahmbot")
+            bot.send_message(chat_id, f"✅ اكتمل!\n\n📊 الإجمالي: {total}\n✅ نجح: {success}\n❌ فشل: {failed}")
         
         threading.Thread(target=do_unfollow, daemon=True).start()
     
@@ -1004,7 +1009,7 @@ def handle_callback(call):
                     bot.send_message(chat_id, f"⏳ {i}/{total} | ✅ {success} | ❌ {failed}")
                 time.sleep(2)
             
-            bot.send_message(chat_id, f"✅ اكتمل!\n\n📊 الإجمالي: {total}\n✅ نجح: {success}\n❌ فشل: {failed}\n\nTikWahmbot")
+            bot.send_message(chat_id, f"✅ اكتمل!\n\n📊 الإجمالي: {total}\n✅ نجح: {success}\n❌ فشل: {failed}")
         
         threading.Thread(target=do_remove_reposts, daemon=True).start()
     
@@ -1013,7 +1018,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         if chat_id in user_sessions:
             del user_sessions[chat_id]
-        bot.send_message(chat_id, t("session_deleted", chat_id) + "\n\nTikWahmbot")
+        bot.send_message(chat_id, t("session_deleted", chat_id))
     
     # === إلغاء ===
     elif data == "cancel_action":
@@ -1038,11 +1043,11 @@ def handle_callback(call):
                 video_url = story.get("play") or story.get("wmplay")
                 if video_url:
                     try:
-                        bot.send_video(chat_id, video_url, caption=f"📖 ستوري {i}/{len(stories)} - @{username}\n\nTikWahmbot")
+                        bot.send_video(chat_id, video_url, caption=f"📖 ستوري {i}/{len(stories)} - @{username}")
                     except:
-                        bot.send_message(chat_id, f"📖 ستوري {i}: {video_url}\n\nTikWahmbot")
+                        bot.send_message(chat_id, f"📖 ستوري {i}: {video_url}")
         else:
-            bot.send_message(chat_id, f"❌ لا يوجد ستوري متاح لـ @{username}\n\nTikWahmbot")
+            bot.send_message(chat_id, f"❌ لا يوجد ستوري متاح لـ @{username}")
     
     elif data.startswith("level_"):
         username = data.replace("level_", "")
@@ -1092,7 +1097,6 @@ def handle_callback(call):
                 if isinstance(h, dict):
                     level_text += f"├ #{h.get('name', '')} ({h.get('count', 0)}x)\n"
         
-        level_text += "\nTikWahmbot"
         bot.send_message(chat_id, level_text)
     
     elif data.startswith("pay_"):
@@ -1127,7 +1131,6 @@ def show_control_panel(chat_id, message_id=None):
         followers=format_number(session.get("followers", 0)),
         following=format_number(session.get("following", 0)),
     )
-    text += "\n\nTikWahmbot"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -1155,46 +1158,16 @@ def handle_message(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
-    # تحقق من الاشتراك الإجباري
-    if not is_subscribed(chat_id):
-        bot.send_message(chat_id, "⚠️ عذراً، يجب عليك الاشتراك في قنوات البوت أولاً لتتمكن من استخدامه.", reply_markup=get_forced_markup())
-        return
-
     if chat_id not in user_lang:
         user_lang[chat_id] = "ar"
     
-    # === معالجة حالات الأدمن ===
-    state = user_states.get(chat_id, {})
-    if chat_id == ADMIN_ID:
-        if state.get("state") == "waiting_broadcast":
-            del user_states[chat_id]
-            success = 0
-            failed = 0
-            bot.send_message(chat_id, f"⏳ جاري الإرسال إلى {len(all_users)} مستخدم...")
-            for uid in all_users:
-                try:
-                    bot.send_message(uid, text + "\n\nTikWahmbot")
-                    success += 1
-                except:
-                    failed += 1
-                time.sleep(0.1)
-            bot.send_message(chat_id, f"✅ اكتمل الإرسال!\n├ نجح: {success}\n└ فشل: {failed}")
-            return
-            
-        elif state.get("state") == "waiting_add_channel":
-            del user_states[chat_id]
-            if text.startswith("@") or text.lstrip("-").isdigit():
-                if text not in FORCED_CHANNELS:
-                    FORCED_CHANNELS.append(text)
-                    save_data(CHANNELS_FILE, FORCED_CHANNELS)
-                    bot.send_message(chat_id, f"✅ تم إضافة القناة {text} بنجاح.")
-                else:
-                    bot.send_message(chat_id, "⚠️ القناة مضافة بالفعل.")
-            else:
-                bot.send_message(chat_id, "❌ معرف قناة غير صحيح.")
-            return
-
+    # التحقق من الاشتراك الإجباري
+    if not is_subscribed(chat_id):
+        bot.send_message(chat_id, "⚠️ يجب عليك الاشتراك في القناة أولاً لاستخدام البوت:", reply_markup=get_subscribe_markup())
+        return
+    
     # === حالة انتظار session_key (معدل - تحقق تلقائي بدون طلب يوزرنيم) ===
+    state = user_states.get(chat_id, {})
     if state.get("state") == "waiting_session":
         session_key = text.strip()
         # التحقق من شكل الـ session (32 حرف hex)
@@ -1268,11 +1241,11 @@ def handle_message(message):
                     info_parts.append("├ الحالة: حساب موجود ✅")
                 
                 info_text = "\n".join(info_parts)
-                bot.send_message(chat_id, t("search_found", chat_id).format(info=info_text) + "\n\nTikWahmbot", parse_mode="HTML")
+                bot.send_message(chat_id, t("search_found", chat_id).format(info=info_text), parse_mode="HTML")
             else:
                 lang = user_lang.get(chat_id, "ar")
                 type_name = "البريد الإلكتروني" if lang == "ar" else ("email" if lang == "en" else "электронной почте")
-                bot.send_message(chat_id, t("search_not_found", chat_id).format(type=type_name) + "\n\nTikWahmbot")
+                bot.send_message(chat_id, t("search_not_found", chat_id).format(type=type_name))
             
             del user_states[chat_id]
         else:
@@ -1310,11 +1283,11 @@ def handle_message(message):
                     info_parts.append("├ الحالة: حساب موجود ✅")
                 
                 info_text = "\n".join(info_parts)
-                bot.send_message(chat_id, t("search_found", chat_id).format(info=info_text) + "\n\nTikWahmbot", parse_mode="HTML")
+                bot.send_message(chat_id, t("search_found", chat_id).format(info=info_text), parse_mode="HTML")
             else:
                 lang = user_lang.get(chat_id, "ar")
                 type_name = "رقم الهاتف" if lang == "ar" else ("phone number" if lang == "en" else "номеру телефона")
-                bot.send_message(chat_id, t("search_not_found", chat_id).format(type=type_name) + "\n\nTikWahmbot")
+                bot.send_message(chat_id, t("search_not_found", chat_id).format(type=type_name))
             
             del user_states[chat_id]
         else:
@@ -1324,8 +1297,8 @@ def handle_message(message):
         return
     
     # === تحميل فيديو تيك توك ===
-    # روابط الفيديو: تشمل /video/ أو الروابط المختصرة (vm.tiktok.com, vt.tiktok.com, tiktok.com/t/)
-    is_video_link = ("tiktok.com/" in text and "/video/" in text) or "vm.tiktok.com/" in text or "vt.tiktok.com/" in text or ("tiktok.com/t/" in text)
+    # يتعرف على كل أنواع روابط الفيديو: /video/, /photo/, الروابط المختصرة (vm, vt, tiktok.com/t/)
+    is_video_link = ("tiktok.com/" in text and "/video/" in text) or ("tiktok.com/" in text and "/photo/" in text) or "vm.tiktok.com/" in text or "vt.tiktok.com/" in text or ("tiktok.com/t/" in text)
     if is_video_link:
         bot.send_chat_action(chat_id, 'typing')
         bot.reply_to(message, "⬇️ جاري تحميل الفيديو... ⏳")
@@ -1354,27 +1327,27 @@ def handle_message(message):
                 except:
                     bot.send_message(chat_id, f"⬇️ رابط التحميل:\n{play_url}")
         else:
-            bot.send_message(chat_id, "❌ فشل تحميل الفيديو. تأكد من صحة الرابط وحاول مرة أخرى.\n\nTikWahmbot")
+            bot.send_message(chat_id, "❌ فشل تحميل الفيديو. تأكد من صحة الرابط وحاول مرة أخرى.")
         return
     
     # === البحث عن حساب تيك توك ===
     username = text.strip()
     
-    # استخراج اليوزر من الرابط
+    # استخراج اليوزر من الرابط بذكاء
     if "tiktok.com/" in username:
         # رابط بروفايل فيه @ مثل: tiktok.com/@hackwahm?_r=1
         if "/@" in username:
             username = username.split("/@")[1].split("/")[0].split("?")[0]
         else:
-            # رابط غير معروف - مو بروفايل
-            bot.reply_to(message, "❌ يرجى إرسال اسم مستخدم صحيح.\n\nTikWahmbot")
+            # رابط غير معروف - مو بروفايل ومو فيديو
+            bot.reply_to(message, "❌ يرجى إرسال اسم مستخدم صحيح.")
             return
     else:
         # يوزر عادي بدون رابط
         username = username.replace("@", "").strip()
     
     if not username or len(username) < 2:
-        bot.reply_to(message, "❌ يرجى إرسال اسم مستخدم صحيح.\n\nTikWahmbot")
+        bot.reply_to(message, "❌ يرجى إرسال اسم مستخدم صحيح.")
         return
     
     bot.send_chat_action(chat_id, 'typing')
@@ -1382,7 +1355,7 @@ def handle_message(message):
     
     user_data = get_tikwm_user(username)
     if not user_data:
-        bot.send_message(chat_id, f"❌ لم يتم العثور على حساب {username}\n\nTikWahmbot")
+        bot.send_message(chat_id, f"❌ لم يتم العثور على حساب {username}")
         return
     
     user = user_data.get("user", {})
@@ -1504,7 +1477,7 @@ def handle_message(message):
         try:
             bot.send_message(chat_id, caption_text)
         except:
-            bot.send_message(chat_id, f"معلومات @{unique_id}\nالمتابعين: {format_number(followers)}\n\nTikWahmbot")
+            bot.send_message(chat_id, f"معلومات @{unique_id}\nالمتابعين: {format_number(followers)}")
     
     # أزرار
     try:
