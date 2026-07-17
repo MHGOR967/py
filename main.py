@@ -6,6 +6,20 @@ import json
 import time
 import threading
 from datetime import datetime
+# === سيرفر ويب لإبقاء البوت شغال على Render ===
+web_app = Flask('')
+
+@web_app.route('/')
+def home():
+    return 'TikWahm Bot is running!'
+
+def run_web():
+    port = int(os.environ.get('PORT', 10000))
+    web_app.run(host='0.0.0.0', port=port)
+
+web_thread = threading.Thread(target=run_web)
+web_thread.daemon = True
+web_thread.start()
 
 BOT_TOKEN = "8945719165:AAHeD9sJFlRDiUKEUUlj6bSoYxtwGmgmKmw"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -14,6 +28,24 @@ try:
     bot.delete_webhook()
 except:
     pass
+
+# === الاشتراك الإجباري ===
+FORCED_CHANNEL = "@urlcam"
+
+def is_subscribed(chat_id):
+    """التحقق من اشتراك المستخدم في القناة الإجبارية"""
+    try:
+        member = bot.get_chat_member(FORCED_CHANNEL, chat_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except:
+        return False
+
+def get_subscribe_markup():
+    """زر الاشتراك في القناة"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/urlcam"))
+    markup.add(types.InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check_sub"))
+    return markup
 
 # === تخزين بيانات المستخدمين ===
 user_states = {}   # {chat_id: {"state": "...", "data": {...}}}
